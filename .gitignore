@@ -1,0 +1,9 @@
+node_modules
+.env
+.env.local
+.firebase
+firebase-debug.log
+coverage
+*.log
+package-lock.json
+yarn.lock
