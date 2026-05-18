@@ -125,6 +125,7 @@ app.post("/api/auth/start", async (req, res) => {
           email,
           password,
           proxyCountry: "us",
+          force_connect: true,
         }),
       },
     );
