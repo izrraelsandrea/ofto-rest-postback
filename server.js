@@ -106,9 +106,10 @@ function requiresFaceId(data) {
   );
 }
 
-// POST /api/auth/start — Begin email+password auth and wait for initial state.
+// POST /api/auth/start — Fire the authentication request and return attempt_id immediately.
+// The frontend must then poll GET /api/auth/status/:attempt_id until it gets a conclusive state.
 // Body: { email, password }
-// Response: { attempt_id, status: "authenticated"|"two_factor_required", account? }
+// Response: { attempt_id }
 app.post("/api/auth/start", async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
@@ -139,48 +140,15 @@ app.post("/api/auth/start", async (req, res) => {
     }
 
     const { attempt_id } = await startRes.json();
-    const pollData = await pollUntilActionNeeded(attempt_id);
-
-    if (requiresFaceId(pollData)) {
-      return res.status(422).json({
-        error: "face_id_not_supported",
-        message:
-          "This account requires Face ID / selfie verification, which is not supported.",
-        attempt_id,
-      });
-    }
-
-    if (pollData.state === "authenticated") {
-      return res.json({
-        attempt_id,
-        status: "authenticated",
-        account: pollData.account,
-      });
-    }
-
-    // Any "needs-*" state that isn't face ID means OTP is required
-    if (
-      typeof pollData.state === "string" &&
-      pollData.state.startsWith("needs-")
-    ) {
-      return res.json({
-        attempt_id,
-        status: "two_factor_required",
-        state: pollData.state, // e.g. "needs-app-otp"
-        otp_phone_ending: pollData.lastAttempt?.otp_phone_ending ?? null,
-      });
-    }
-
-    return res
-      .status(400)
-      .json({ error: "authentication_failed", details: pollData });
+    // Return immediately — let the frontend poll /api/auth/status/:attempt_id
+    return res.json({ attempt_id });
   } catch (err) {
-    const status = err.status || 500;
-    res.status(status).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/auth/status/:attempt_id — Forward a single poll to OnlyFansAPI.
+// GET /api/auth/status/:attempt_id — Single poll, normalized for the frontend.
+// Returns: { status: "pending"|"authenticated"|"two_factor_required"|"failed", state, account?, otp_phone_ending? }
 app.get("/api/auth/status/:attempt_id", async (req, res) => {
   try {
     const r = await fetch(
@@ -192,6 +160,7 @@ app.get("/api/auth/status/:attempt_id", async (req, res) => {
       return res.status(r.status).send(err);
     }
     const data = await r.json();
+
     if (requiresFaceId(data)) {
       return res.status(422).json({
         error: "face_id_not_supported",
@@ -199,7 +168,29 @@ app.get("/api/auth/status/:attempt_id", async (req, res) => {
           "This account requires Face ID / selfie verification, which is not supported.",
       });
     }
-    res.json(data);
+
+    if (data.state === "authenticated") {
+      return res.json({
+        status: "authenticated",
+        state: data.state,
+        account: data.account,
+      });
+    }
+
+    if (typeof data.state === "string" && data.state.startsWith("needs-")) {
+      return res.json({
+        status: "two_factor_required",
+        state: data.state,
+        otp_phone_ending: data.lastAttempt?.otp_phone_ending ?? null,
+      });
+    }
+
+    if (data.state === "failed") {
+      return res.status(400).json({ status: "failed", state: data.state });
+    }
+
+    // Still in progress — frontend should keep polling
+    return res.json({ status: "pending", state: data.state });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
