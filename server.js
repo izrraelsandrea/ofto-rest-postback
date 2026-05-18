@@ -81,12 +81,11 @@ async function pollUntilActionNeeded(
         status: res.status,
       });
     const data = await res.json();
+    // Conclusive states: authenticated, failed, or any "needs-*" (OTP, face-id, etc.)
     const done =
       data.state === "authenticated" ||
       data.state === "failed" ||
-      data.twoFactorPending === true ||
-      data.selfieVerificationRequired === true ||
-      data.faceIdRequired === true;
+      (typeof data.state === "string" && data.state.startsWith("needs-"));
     if (done) return data;
     await new Promise((r) => setTimeout(r, intervalMs));
   }
@@ -94,12 +93,16 @@ async function pollUntilActionNeeded(
 }
 
 // Detect if a poll response demands face/selfie ID (unsupported).
+// Known face-ID states from OnlyFansAPI: "needs-face-id", "needs-selfie"
 function requiresFaceId(data) {
   return (
+    data.state === "needs-face-id" ||
+    data.state === "needs-selfie" ||
     data.faceIdRequired === true ||
     data.selfieVerificationRequired === true ||
     data.twoFactorType === "face_id" ||
-    data.twoFactorType === "selfie"
+    data.twoFactorType === "selfie" ||
+    data.lastAttempt?.face_otp != null
   );
 }
 
@@ -155,8 +158,17 @@ app.post("/api/auth/start", async (req, res) => {
       });
     }
 
-    if (pollData.twoFactorPending) {
-      return res.json({ attempt_id, status: "two_factor_required" });
+    // Any "needs-*" state that isn't face ID means OTP is required
+    if (
+      typeof pollData.state === "string" &&
+      pollData.state.startsWith("needs-")
+    ) {
+      return res.json({
+        attempt_id,
+        status: "two_factor_required",
+        state: pollData.state, // e.g. "needs-app-otp"
+        otp_phone_ending: pollData.lastAttempt?.otp_phone_ending ?? null,
+      });
     }
 
     return res
