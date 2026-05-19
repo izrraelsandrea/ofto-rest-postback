@@ -196,6 +196,27 @@ app.get("/api/auth/status/:attempt_id", async (req, res) => {
   }
 });
 
+// POST /api/auth/send-email/:attempt_id — Trigger a 2FA verification email to the creator.
+// No body required. Use when status is "two_factor_required" and the user chooses email delivery.
+app.post("/api/auth/send-email/:attempt_id", async (req, res) => {
+  try {
+    const r = await fetch(
+      `https://app.onlyfansapi.com/api/authenticate/${req.params.attempt_id}/send-email-to-creator`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${process.env.ONLYFANS_API_KEY}` },
+      },
+    );
+    if (!r.ok) {
+      const err = await r.text();
+      return res.status(r.status).send(err);
+    }
+    res.json(await r.json());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // PUT /api/auth/submit-2fa/:attempt_id — Submit OTP code.
 // Body: { code }
 app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
