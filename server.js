@@ -3,14 +3,27 @@ require("dotenv").config();
 const admin = require("firebase-admin");
 const express = require("express");
 const morgan = require("morgan");
+const { rateLimit } = require("express-rate-limit");
 const transactionsController = require("./controllers/transactionsController");
 
 const app = express();
 
 // Logging & parsers
+// Note: morgan "tiny" logs method + URL only — never request bodies, so passwords are never logged.
 app.use(morgan("tiny"));
 app.use(express.json({ limit: "100kb" })); // application/json
 app.use(express.urlencoded({ extended: true })); // application/x-www-form-urlencoded
+
+// Rate limiting — auth endpoints only (brute force / credential stuffing protection)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  limit: 10, // max 10 attempts per IP per window
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: {
+    error: "Too many authentication attempts. Please try again in 15 minutes.",
+  },
+});
 
 // CORS
 const ALLOWED_ORIGINS = (
@@ -110,7 +123,7 @@ function requiresFaceId(data) {
 // The frontend must then poll GET /api/auth/status/:attempt_id until it gets a conclusive state.
 // Body: { email, password }
 // Response: { attempt_id }
-app.post("/api/auth/start", async (req, res) => {
+app.post("/api/auth/start", authLimiter, async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: "email and password are required" });
@@ -219,14 +232,18 @@ app.post("/api/auth/send-email/:attempt_id", async (req, res) => {
 
 // PUT /api/auth/submit-2fa/:attempt_id — Submit OTP code.
 // Body: { code }
+// On wrong code: polls status to re-confirm the OTP slot is live, then returns
+// { error, canRetry: true, status: "two_factor_required" } so the frontend can
+// let the user try again without restarting the login flow.
 app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
+  const { attempt_id } = req.params;
   const { code } = req.body;
   if (!code) {
     return res.status(400).json({ error: "code is required" });
   }
   try {
     const r = await fetch(
-      `https://app.onlyfansapi.com/api/authenticate/${req.params.attempt_id}`,
+      `https://app.onlyfansapi.com/api/authenticate/${attempt_id}`,
       {
         method: "PUT",
         headers: {
@@ -236,11 +253,55 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
         body: JSON.stringify({ code }),
       },
     );
-    if (!r.ok) {
-      const err = await r.text();
-      return res.status(r.status).send(err);
+
+    // Success — OTP accepted
+    if (r.ok) {
+      return res.json(await r.json());
     }
-    res.json(await r.json());
+
+    // Wrong / rejected code — poll once to re-confirm the attempt is still live
+    // and a fresh OTP slot is ready before telling the frontend to retry.
+    let canRetry = false;
+    let retryStatus = null;
+    let otp_phone_ending = null;
+    try {
+      const statusRes = await fetch(
+        `https://app.onlyfansapi.com/api/authenticate/${attempt_id}`,
+        {
+          headers: { Authorization: `Bearer ${process.env.ONLYFANS_API_KEY}` },
+        },
+      );
+      if (statusRes.ok) {
+        const statusData = await statusRes.json();
+        if (
+          typeof statusData.state === "string" &&
+          statusData.state.startsWith("needs-") &&
+          !requiresFaceId(statusData)
+        ) {
+          canRetry = true;
+          retryStatus = "two_factor_required";
+          otp_phone_ending = statusData.lastAttempt?.otp_phone_ending ?? null;
+        }
+      }
+    } catch {
+      // Swallow — we still return the original OTP error below
+    }
+
+    const errBody = await r.text();
+    let errMessage;
+    try {
+      errMessage =
+        JSON.parse(errBody)?.message || JSON.parse(errBody)?.error || errBody;
+    } catch {
+      errMessage = errBody;
+    }
+
+    return res.status(r.status).json({
+      error: "invalid_code",
+      message: errMessage,
+      canRetry,
+      ...(canRetry && { status: retryStatus, otp_phone_ending }),
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
