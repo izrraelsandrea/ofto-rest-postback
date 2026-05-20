@@ -281,7 +281,10 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
         return res.json({ status: "authenticated", account: data.account });
       }
 
-      // Wrong code — OnlyFans went back to needing OTP
+      // Wrong code — OnlyFans went back to needing OTP.
+      // The OTP slot is now consumed. Re-authenticate using the account_id from the
+      // poll response to get a fresh attempt_id with a new OTP slot, without needing
+      // the user to re-enter their credentials.
       if (typeof data.state === "string" && data.state.startsWith("needs-")) {
         if (requiresFaceId(data)) {
           return res.status(422).json({
@@ -290,13 +293,39 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
               "This account requires Face ID / selfie verification, which is not supported.",
           });
         }
+
+        // Re-authenticate to get a fresh attempt_id
+        let newAttemptId = null;
+        const accountId = data.account?.id;
+        if (accountId) {
+          try {
+            const reauthRes = await fetch(
+              `https://app.onlyfansapi.com/api/authenticate/${accountId}/reauthenticate`,
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${process.env.ONLYFANS_API_KEY}`,
+                },
+              },
+            );
+            if (reauthRes.ok) {
+              const reauthData = await reauthRes.json();
+              // polling_url is like https://app.onlyfansapi.com/api/authenticate/auth_XXXXX
+              newAttemptId = reauthData.polling_url?.split("/").pop() ?? null;
+            }
+          } catch {
+            // Re-auth failed — canRetry will be false, frontend restarts
+          }
+        }
+
         return res.status(400).json({
           error: "invalid_code",
           message: "Incorrect code. Please try again.",
-          canRetry: true,
+          canRetry: newAttemptId !== null,
           status: "two_factor_required",
           state: data.state,
           otp_phone_ending: data.lastAttempt?.otp_phone_ending ?? null,
+          ...(newAttemptId && { attempt_id: newAttemptId }),
         });
       }
 
