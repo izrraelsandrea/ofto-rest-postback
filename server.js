@@ -269,7 +269,9 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
 
       const statusRes = await fetch(
         `https://app.onlyfansapi.com/api/authenticate/${attempt_id}`,
-        { headers: { Authorization: `Bearer ${process.env.ONLYFANS_API_KEY}` } },
+        {
+          headers: { Authorization: `Bearer ${process.env.ONLYFANS_API_KEY}` },
+        },
       );
       if (!statusRes.ok) continue;
       const data = await statusRes.json();
@@ -284,7 +286,8 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
         if (requiresFaceId(data)) {
           return res.status(422).json({
             error: "face_id_not_supported",
-            message: "This account requires Face ID / selfie verification, which is not supported.",
+            message:
+              "This account requires Face ID / selfie verification, which is not supported.",
           });
         }
         return res.status(400).json({
@@ -299,7 +302,9 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
 
       // Failed entirely
       if (data.state === "failed") {
-        return res.status(400).json({ error: "authentication_failed", status: "failed" });
+        return res
+          .status(400)
+          .json({ error: "authentication_failed", status: "failed" });
       }
 
       // Still "authenticating" — keep polling
@@ -308,7 +313,8 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
     // Timed out waiting for the OTP result — tell frontend to keep polling status itself
     return res.status(202).json({
       status: "pending",
-      message: "OTP submitted. Poll /api/auth/status/:attempt_id for the result.",
+      message:
+        "OTP submitted. Poll /api/auth/status/:attempt_id for the result.",
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
