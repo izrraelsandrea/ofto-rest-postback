@@ -232,9 +232,10 @@ app.post("/api/auth/send-email/:attempt_id", async (req, res) => {
 
 // PUT /api/auth/submit-2fa/:attempt_id — Submit OTP code.
 // Body: { code }
-// On wrong code: polls status to re-confirm the OTP slot is live, then returns
-// { error, canRetry: true, status: "two_factor_required" } so the frontend can
-// let the user try again without restarting the login flow.
+// OnlyFansAPI always returns {"message":"OTP submitted successfully"} on acceptance —
+// even for wrong codes. The real outcome is only visible by polling after submission.
+// This endpoint submits the code then polls until the state resolves, returning the
+// true result: authenticated, invalid code (canRetry), or failed.
 app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
   const { attempt_id } = req.params;
   const { code } = req.body;
@@ -254,53 +255,60 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
       },
     );
 
-    // Success — OTP accepted
-    if (r.ok) {
-      return res.json(await r.json());
+    if (!r.ok) {
+      const err = await r.text();
+      return res.status(r.status).send(err);
     }
 
-    // Wrong / rejected code — poll once to re-confirm the attempt is still live
-    // and a fresh OTP slot is ready before telling the frontend to retry.
-    let canRetry = false;
-    let retryStatus = null;
-    let otp_phone_ending = null;
-    try {
+    // Submission acknowledged — now poll until the real outcome is known.
+    // Typically resolves in 2–5s (well within Heroku's 30s request timeout).
+    const maxAttempts = 15;
+    const intervalMs = 1500;
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+
       const statusRes = await fetch(
         `https://app.onlyfansapi.com/api/authenticate/${attempt_id}`,
-        {
-          headers: { Authorization: `Bearer ${process.env.ONLYFANS_API_KEY}` },
-        },
+        { headers: { Authorization: `Bearer ${process.env.ONLYFANS_API_KEY}` } },
       );
-      if (statusRes.ok) {
-        const statusData = await statusRes.json();
-        if (
-          typeof statusData.state === "string" &&
-          statusData.state.startsWith("needs-") &&
-          !requiresFaceId(statusData)
-        ) {
-          canRetry = true;
-          retryStatus = "two_factor_required";
-          otp_phone_ending = statusData.lastAttempt?.otp_phone_ending ?? null;
-        }
+      if (!statusRes.ok) continue;
+      const data = await statusRes.json();
+
+      // Truly authenticated
+      if (data.state === "authenticated") {
+        return res.json({ status: "authenticated", account: data.account });
       }
-    } catch {
-      // Swallow — we still return the original OTP error below
+
+      // Wrong code — OnlyFans went back to needing OTP
+      if (typeof data.state === "string" && data.state.startsWith("needs-")) {
+        if (requiresFaceId(data)) {
+          return res.status(422).json({
+            error: "face_id_not_supported",
+            message: "This account requires Face ID / selfie verification, which is not supported.",
+          });
+        }
+        return res.status(400).json({
+          error: "invalid_code",
+          message: "Incorrect code. Please try again.",
+          canRetry: true,
+          status: "two_factor_required",
+          state: data.state,
+          otp_phone_ending: data.lastAttempt?.otp_phone_ending ?? null,
+        });
+      }
+
+      // Failed entirely
+      if (data.state === "failed") {
+        return res.status(400).json({ error: "authentication_failed", status: "failed" });
+      }
+
+      // Still "authenticating" — keep polling
     }
 
-    const errBody = await r.text();
-    let errMessage;
-    try {
-      errMessage =
-        JSON.parse(errBody)?.message || JSON.parse(errBody)?.error || errBody;
-    } catch {
-      errMessage = errBody;
-    }
-
-    return res.status(r.status).json({
-      error: "invalid_code",
-      message: errMessage,
-      canRetry,
-      ...(canRetry && { status: retryStatus, otp_phone_ending }),
+    // Timed out waiting for the OTP result — tell frontend to keep polling status itself
+    return res.status(202).json({
+      status: "pending",
+      message: "OTP submitted. Poll /api/auth/status/:attempt_id for the result.",
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
