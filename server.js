@@ -282,9 +282,10 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
       }
 
       // Wrong code — OnlyFans went back to needing OTP.
-      // The OTP slot is now consumed. Re-authenticate using the account_id from the
-      // poll response to get a fresh attempt_id with a new OTP slot, without needing
-      // the user to re-enter their credentials.
+      // The attempt is still alive (progress: "retrying_otp") and accepts another
+      // submission. Re-authentication is not possible while the attempt is active
+      // ("Previous authentication attempt is still in progress"). Return the same
+      // attempt_id so the frontend can let the user try again immediately.
       if (typeof data.state === "string" && data.state.startsWith("needs-")) {
         if (requiresFaceId(data)) {
           return res.status(422).json({
@@ -293,59 +294,18 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
               "This account requires Face ID / selfie verification, which is not supported.",
           });
         }
-
-        // Re-authenticate to get a fresh attempt_id
-        let newAttemptId = null;
-        const accountId = data.account?.id;
         console.log(
-          "[submit-2fa] wrong code detected — poll data:",
-          JSON.stringify(data),
+          "[submit-2fa] wrong code — attempt still alive, returning same attempt_id:",
+          attempt_id,
         );
-        console.log("[submit-2fa] accountId for re-auth:", accountId);
-        if (accountId) {
-          try {
-            const reauthRes = await fetch(
-              `https://app.onlyfansapi.com/api/authenticate/${accountId}/reauthenticate`,
-              {
-                method: "POST",
-                headers: {
-                  Authorization: `Bearer ${process.env.ONLYFANS_API_KEY}`,
-                },
-              },
-            );
-            const reauthText = await reauthRes.text();
-            console.log(
-              "[submit-2fa] re-auth status:",
-              reauthRes.status,
-              "body:",
-              reauthText,
-            );
-            if (reauthRes.ok) {
-              const reauthData = JSON.parse(reauthText);
-              // polling_url is like https://app.onlyfansapi.com/api/authenticate/auth_XXXXX
-              newAttemptId = reauthData.polling_url?.split("/").pop() ?? null;
-              console.log("[submit-2fa] new attempt_id:", newAttemptId);
-            }
-          } catch (reauthErr) {
-            console.error(
-              "[submit-2fa] re-auth request error:",
-              reauthErr.message,
-            );
-          }
-        } else {
-          console.warn(
-            "[submit-2fa] no accountId in poll response — cannot re-authenticate",
-          );
-        }
-
         return res.status(400).json({
           error: "invalid_code",
           message: "Incorrect code. Please try again.",
-          canRetry: newAttemptId !== null,
+          canRetry: true,
           status: "two_factor_required",
           state: data.state,
+          attempt_id, // still valid — frontend must reuse this
           otp_phone_ending: data.lastAttempt?.otp_phone_ending ?? null,
-          ...(newAttemptId && { attempt_id: newAttemptId }),
         });
       }
 
