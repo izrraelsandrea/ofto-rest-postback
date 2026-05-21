@@ -294,10 +294,6 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
               "This account requires Face ID / selfie verification, which is not supported.",
           });
         }
-        console.log(
-          "[submit-2fa] wrong code — attempt still alive, returning same attempt_id:",
-          attempt_id,
-        );
         return res.status(400).json({
           error: "invalid_code",
           message: "Incorrect code. Please try again.",
