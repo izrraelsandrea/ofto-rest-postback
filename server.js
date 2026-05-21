@@ -262,8 +262,13 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
 
     // Submission acknowledged — now poll until the real outcome is known.
     // Typically resolves in 2–5s (well within Heroku's 30s request timeout).
+    // We require 2 consecutive needs-* polls before declaring wrong code — a single
+    // needs-* response after submission may just be OnlyFansAPI still processing
+    // (especially in retrying_otp state where the state doesn't go through
+    // "authenticating" as an intermediate step).
     const maxAttempts = 15;
     const intervalMs = 1500;
+    let needsOtpCount = 0;
     for (let i = 0; i < maxAttempts; i++) {
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
 
@@ -281,11 +286,9 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
         return res.json({ status: "authenticated", account: data.account });
       }
 
-      // Wrong code — OnlyFans went back to needing OTP.
-      // The attempt is still alive (progress: "retrying_otp") and accepts another
-      // submission. Re-authentication is not possible while the attempt is active
-      // ("Previous authentication attempt is still in progress"). Return the same
-      // attempt_id so the frontend can let the user try again immediately.
+      // needs-* state: could be "still processing" or confirmed wrong code.
+      // Require 2 consecutive needs-* polls to avoid falsely rejecting a correct
+      // code that OnlyFansAPI hasn't finished validating yet.
       if (typeof data.state === "string" && data.state.startsWith("needs-")) {
         if (requiresFaceId(data)) {
           return res.status(422).json({
@@ -294,6 +297,8 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
               "This account requires Face ID / selfie verification, which is not supported.",
           });
         }
+        needsOtpCount++;
+        if (needsOtpCount < 2) continue; // keep polling to confirm
         return res.status(400).json({
           error: "invalid_code",
           message: "Incorrect code. Please try again.",
@@ -304,6 +309,9 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
           otp_phone_ending: data.lastAttempt?.otp_phone_ending ?? null,
         });
       }
+
+      // Reset counter if we see a different state (e.g. authenticating)
+      needsOtpCount = 0;
 
       // Failed entirely
       if (data.state === "failed") {
