@@ -267,14 +267,10 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
     }
 
     // Submission acknowledged — now poll until the real outcome is known.
-    // Typically resolves in 2–5s (well within Heroku's 30s request timeout).
-    // We require 2 consecutive needs-* polls before declaring wrong code — a single
-    // needs-* response after submission may just be OnlyFansAPI still processing
-    // (especially in retrying_otp state where the state doesn't go through
-    // "authenticating" as an intermediate step).
+    // needs-* with progress=retrying_otp means OnlyFansAPI is still validating — keep polling.
+    // needs-* with progress=wrong_2fa_code_retry or error_code=WRONG_2FA means confirmed wrong.
     const maxAttempts = 15;
     const intervalMs = 1500;
-    let needsOtpCount = 0;
     for (let i = 0; i < maxAttempts; i++) {
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
 
@@ -287,7 +283,7 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
       if (!statusRes.ok) continue;
       const data = await statusRes.json();
       console.log(
-        `[submit-2fa] poll ${i + 1}: state=${data.state} progress=${data.progress} needsOtpCount=${needsOtpCount} lastAttempt=${JSON.stringify(data.lastAttempt)}`,
+        `[submit-2fa] poll ${i + 1}: state=${data.state} progress=${data.progress} error_code=${data.lastAttempt?.error_code}`,
       );
 
       // Truly authenticated
@@ -295,9 +291,9 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
         return res.json({ status: "authenticated", account: data.account });
       }
 
-      // needs-* state: could be "still processing" or confirmed wrong code.
-      // Require 2 consecutive needs-* polls to avoid falsely rejecting a correct
-      // code that OnlyFansAPI hasn't finished validating yet.
+      // needs-* state — distinguish "still processing" from "confirmed wrong":
+      //   progress=retrying_otp + error_code=null  → OnlyFansAPI is still validating, keep polling
+      //   progress=wrong_2fa_code_retry or error_code=WRONG_2FA → confirmed wrong code
       if (typeof data.state === "string" && data.state.startsWith("needs-")) {
         if (requiresFaceId(data)) {
           return res.status(422).json({
@@ -306,8 +302,10 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
               "This account requires Face ID / selfie verification, which is not supported.",
           });
         }
-        needsOtpCount++;
-        if (needsOtpCount < 2) continue; // keep polling to confirm
+        const confirmedWrong =
+          data.progress === "wrong_2fa_code_retry" ||
+          data.lastAttempt?.error_code === "WRONG_2FA";
+        if (!confirmedWrong) continue; // still processing — keep polling
         return res.status(400).json({
           error: "invalid_code",
           message: "Incorrect code. Please try again.",
@@ -318,9 +316,6 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
           otp_phone_ending: data.lastAttempt?.otp_phone_ending ?? null,
         });
       }
-
-      // Reset counter if we see a different state (e.g. authenticating)
-      needsOtpCount = 0;
 
       // Failed entirely
       if (data.state === "failed") {
