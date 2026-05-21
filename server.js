@@ -239,6 +239,9 @@ app.post("/api/auth/send-email/:attempt_id", async (req, res) => {
 app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
   const { attempt_id } = req.params;
   const { code } = req.body;
+  console.log(
+    `[submit-2fa] attempt_id=${attempt_id} body=${JSON.stringify(req.body)}`,
+  );
   if (!code) {
     return res.status(400).json({ error: "code is required" });
   }
@@ -256,8 +259,11 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
     );
 
     if (!r.ok) {
-      const err = await r.text();
-      return res.status(r.status).send(err);
+      const errText = await r.text();
+      console.log(
+        `[submit-2fa] OnlyFansAPI PUT rejected: ${r.status} ${errText}`,
+      );
+      return res.status(r.status).send(errText);
     }
 
     // Submission acknowledged — now poll until the real outcome is known.
@@ -280,6 +286,9 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
       );
       if (!statusRes.ok) continue;
       const data = await statusRes.json();
+      console.log(
+        `[submit-2fa] poll ${i + 1}: state=${data.state} progress=${data.progress} needsOtpCount=${needsOtpCount} lastAttempt=${JSON.stringify(data.lastAttempt)}`,
+      );
 
       // Truly authenticated
       if (data.state === "authenticated") {
