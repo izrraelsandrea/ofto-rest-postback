@@ -297,7 +297,10 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
         // Re-authenticate to get a fresh attempt_id
         let newAttemptId = null;
         const accountId = data.account?.id;
-        console.log("[submit-2fa] wrong code detected — poll data:", JSON.stringify(data));
+        console.log(
+          "[submit-2fa] wrong code detected — poll data:",
+          JSON.stringify(data),
+        );
         console.log("[submit-2fa] accountId for re-auth:", accountId);
         if (accountId) {
           try {
@@ -311,7 +314,12 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
               },
             );
             const reauthText = await reauthRes.text();
-            console.log("[submit-2fa] re-auth status:", reauthRes.status, "body:", reauthText);
+            console.log(
+              "[submit-2fa] re-auth status:",
+              reauthRes.status,
+              "body:",
+              reauthText,
+            );
             if (reauthRes.ok) {
               const reauthData = JSON.parse(reauthText);
               // polling_url is like https://app.onlyfansapi.com/api/authenticate/auth_XXXXX
@@ -319,10 +327,15 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
               console.log("[submit-2fa] new attempt_id:", newAttemptId);
             }
           } catch (reauthErr) {
-            console.error("[submit-2fa] re-auth request error:", reauthErr.message);
+            console.error(
+              "[submit-2fa] re-auth request error:",
+              reauthErr.message,
+            );
           }
         } else {
-          console.warn("[submit-2fa] no accountId in poll response — cannot re-authenticate");
+          console.warn(
+            "[submit-2fa] no accountId in poll response — cannot re-authenticate",
+          );
         }
 
         return res.status(400).json({
