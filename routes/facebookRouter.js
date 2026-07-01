@@ -1,5 +1,6 @@
 const { Router } = require("express");
 const admin = require("firebase-admin");
+const { initFirebase } = require("../controllers/transactionsHelpers");
 
 const router = Router();
 
@@ -76,6 +77,7 @@ router.get("/conversions", async (req, res) => {
 
   // Save to Firebase before sending to Facebook
   try {
+    initFirebase();
     const db = admin.database();
     await db.ref("postback_logs").push({
       received_at: new Date().toISOString(),
