@@ -79,14 +79,27 @@ router.get("/conversions", async (req, res) => {
   try {
     initFirebase();
     const db = admin.database();
-    await db.ref("postback_logs").push({
-      received_at: new Date().toISOString(),
-      raw_query: req.query,
-      payload_sent: eventPayload,
-      ip: req.ip,
-    });
+    console.log("[adpostback] Firebase app name:", admin.app().name);
+    console.log("[adpostback] DB URL:", admin.app().options.databaseURL);
+    const ref = db.ref("postback_logs");
+    console.log("[adpostback] Writing to ref:", ref.toString());
+    const snap = await ref.push(
+      JSON.parse(
+        JSON.stringify({
+          received_at: new Date().toISOString(),
+          raw_query: req.query,
+          payload_sent: eventPayload,
+          ip: req.ip,
+        }),
+      ),
+    );
+    console.log("[adpostback] postback_log written, key:", snap.key);
   } catch (logErr) {
-    console.error("[adpostback] Failed to write postback_log:", logErr);
+    console.error(
+      "[adpostback] Failed to write postback_log:",
+      logErr.message,
+      logErr.stack,
+    );
   }
 
   try {
