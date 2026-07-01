@@ -5,6 +5,7 @@ const express = require("express");
 const morgan = require("morgan");
 const { rateLimit } = require("express-rate-limit");
 const transactionsController = require("./controllers/transactionsController");
+const facebookRouter = require("./routes/facebookRouter");
 
 const app = express();
 
@@ -340,6 +341,9 @@ app.put("/api/auth/submit-2fa/:attempt_id", async (req, res) => {
 
 // S2S postback endpoint (accepts GET & POST)
 app.all("/postback", transactionsController.handlePostback);
+
+// Ad postback → Meta Conversions API
+app.use("/api/adpostback", facebookRouter);
 
 // 404 fallback
 app.use((req, res) => res.status(404).json({ error: "Not found" }));
