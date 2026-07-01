@@ -1,4 +1,5 @@
 const { Router } = require("express");
+const admin = require("firebase-admin");
 
 const router = Router();
 
@@ -72,6 +73,19 @@ router.get("/conversions", async (req, res) => {
   };
 
   const url = `https://graph.facebook.com/${FB_API_VERSION}/${pixelId}/events`;
+
+  // Save to Firebase before sending to Facebook
+  try {
+    const db = admin.database();
+    await db.ref("postback_logs").push({
+      received_at: new Date().toISOString(),
+      raw_query: req.query,
+      payload_sent: eventPayload,
+      ip: req.ip,
+    });
+  } catch (logErr) {
+    console.error("[adpostback] Failed to write postback_log:", logErr);
+  }
 
   try {
     const fbRes = await fetch(url, {
