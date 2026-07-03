@@ -76,6 +76,7 @@ router.get("/conversions", async (req, res) => {
   const url = `https://graph.facebook.com/${FB_API_VERSION}/${pixelId}/events`;
 
   // Save to Firebase before sending to Facebook
+  let logRef = null;
   try {
     initFirebase();
     const db = admin.database();
@@ -93,6 +94,7 @@ router.get("/conversions", async (req, res) => {
         }),
       ),
     );
+    logRef = snap.ref;
     console.log("[adpostback] postback_log written, key:", snap.key);
   } catch (logErr) {
     console.error(
@@ -114,6 +116,21 @@ router.get("/conversions", async (req, res) => {
     });
 
     const fbData = await fbRes.json();
+
+    if (logRef) {
+      try {
+        await logRef.update({
+          fb_response: JSON.parse(JSON.stringify(fbData)),
+          fb_status: fbRes.status,
+          responded_at: new Date().toISOString(),
+        });
+      } catch (updateErr) {
+        console.error(
+          "[adpostback] Failed to update postback_log with FB response:",
+          updateErr.message,
+        );
+      }
+    }
 
     if (!fbRes.ok) {
       console.error(
